@@ -5,14 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
-
-export interface DownloadError {
-  error: string;
-  detail?: string;
-}
+import type { DownloadHlsAsMp4Mode } from './downloadHlsAsMp4Mode';
 
 export type DownloadHlsAsMp4Params = {
 /**
@@ -24,12 +17,3 @@ url: string;
  */
 mode?: DownloadHlsAsMp4Mode;
 };
-
-export type DownloadHlsAsMp4Mode = typeof DownloadHlsAsMp4Mode[keyof typeof DownloadHlsAsMp4Mode];
-
-
-export const DownloadHlsAsMp4Mode = {
-  compatible: 'compatible',
-  fast: 'fast',
-} as const;
-

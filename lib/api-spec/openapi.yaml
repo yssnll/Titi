@@ -24,6 +24,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /downloads/mp4:
+    get:
+      operationId: downloadHlsAsMp4
+      tags: [downloads]
+      summary: Convert an HLS stream to MP4
+      description: Downloads a signed HLS playlist, converts it to a phone-compatible MP4, and returns the file.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          description: Public HTTP(S) URL of the HLS playlist.
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          description: Fast remux when the source codecs are MP4-compatible, or a broader compatibility conversion.
+          schema:
+            type: string
+            enum: [compatible, fast]
+            default: compatible
+      responses:
+        "200":
+          description: Converted MP4 video
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid or expired stream URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadError"
+        "502":
+          description: The source could not be fetched or converted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadError"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +74,13 @@ components:
           type: string
       required:
         - status
+    DownloadError:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+      required:
+        - error
 

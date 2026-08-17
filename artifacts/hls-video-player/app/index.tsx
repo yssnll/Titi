@@ -18,6 +18,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getDownloadHlsAsMp4Url } from '@workspace/api-client-react';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useColors } from '@/hooks/useColors';
 
@@ -27,7 +28,7 @@ const HISTORY_KEY = '@hls-video-player/history';
 const MAX_HISTORY = 5;
 
 type PlaybackState = 'idle' | 'loading' | 'ready' | 'error';
-type DownloadAction = 'save' | 'browser' | 'share';
+type DownloadAction = 'mp4' | 'fast' | 'browser' | 'share';
 
 function isValidStreamUrl(value: string) {
   try {
@@ -86,15 +87,13 @@ function formatExpiry(expiry: number) {
   }).format(new Date(expiry));
 }
 
-function getDownloadFilename(streamUrl: string) {
-  try {
-    const pathname = new URL(streamUrl).pathname;
-    const lastSegment = pathname.split('/').filter(Boolean).pop();
-    if (lastSegment?.includes('.')) return lastSegment.split('?')[0];
-  } catch {
-    // Use the fallback below for malformed URLs; validation happens before download.
+function getApiDownloadUrl(streamUrl: string, mode: 'compatible' | 'fast') {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (!domain) {
+    throw new Error('Le service de conversion MP4 est indisponible dans cet environnement.');
   }
-  return 'flux-hls.m3u8';
+  const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
+  return `${baseUrl}${getDownloadHlsAsMp4Url({ url: streamUrl, mode })}`;
 }
 
 export default function PlayerScreen() {
@@ -229,11 +228,12 @@ export default function PlayerScreen() {
 
     setDownloadState('working');
     try {
-      const filename = getDownloadFilename(sourceUrl);
+      const mode = action === 'fast' ? 'fast' : 'compatible';
+      const filename = `video-${Date.now()}.mp4`;
       const file = await File.downloadFileAsync(
-        sourceUrl,
+        getApiDownloadUrl(sourceUrl, mode),
         new File(Paths.cache, filename),
-        { headers: getStreamHeaders(sourceUrl), idempotent: true },
+        { idempotent: true },
       );
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
@@ -241,9 +241,9 @@ export default function PlayerScreen() {
         return;
       }
       await Sharing.shareAsync(file.uri, {
-        UTI: 'public.playlist',
-        mimeType: 'application/vnd.apple.mpegurl',
-        dialogTitle: 'Enregistrer la playlist HLS',
+        UTI: 'public.mpeg-4',
+        mimeType: 'video/mp4',
+        dialogTitle: 'Enregistrer la vidéo MP4',
       });
     } catch (error) {
       Alert.alert(
@@ -449,23 +449,44 @@ export default function PlayerScreen() {
               </Text>
 
               <Pressable
-                testID="save-download-option"
+                testID="mp4-download-option"
                 disabled={downloadState === 'working'}
-                onPress={() => void downloadSource('save')}
+                onPress={() => void downloadSource('mp4')}
                 style={({ pressed }) => [
                   styles.downloadOption,
                   { borderColor: colors.border, backgroundColor: colors.input, opacity: pressed ? 0.72 : 1 },
                 ]}
               >
                 <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
-                  <Ionicons name="folder-open-outline" size={20} color={colors.accent} />
+                  <Ionicons name="videocam-outline" size={20} color={colors.accent} />
                 </View>
                 <View style={styles.optionCopy}>
                   <Text style={[styles.optionTitle, { color: colors.foreground }]}>
-                    {downloadState === 'working' ? 'Téléchargement…' : 'Enregistrer la playlist HLS'}
+                    {downloadState === 'working' ? 'Conversion MP4…' : 'Télécharger en MP4'}
                   </Text>
                   <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
-                    Télécharge le fichier .m3u8, puis ouvre le menu iOS pour l’enregistrer dans Fichiers.
+                    Convertit le flux en vidéo MP4 compatible avec l’iPhone, puis ouvre le menu iOS pour l’enregistrer.
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </Pressable>
+
+              <Pressable
+                testID="fast-mp4-download-option"
+                disabled={downloadState === 'working'}
+                onPress={() => void downloadSource('fast')}
+                style={({ pressed }) => [
+                  styles.downloadOption,
+                  { borderColor: colors.border, backgroundColor: colors.input, opacity: pressed ? 0.72 : 1 },
+                ]}
+              >
+                <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
+                  <Ionicons name="flash-outline" size={20} color={colors.accent} />
+                </View>
+                <View style={styles.optionCopy}>
+                  <Text style={[styles.optionTitle, { color: colors.foreground }]}>MP4 rapide</Text>
+                  <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
+                    Essaie de conserver la qualité originale sans réencoder la vidéo.
                   </Text>
                 </View>
                 <Feather name="chevron-right" size={18} color={colors.mutedForeground} />

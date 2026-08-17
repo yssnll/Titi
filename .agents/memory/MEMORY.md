@@ -1,0 +1,1 @@
+- [OpenAPI URI schemas](openapi-uri-schemas.md) — avoid `format: uri` when the generated Zod target is Zod 3; it emits an unavailable `zod.url()` call.
