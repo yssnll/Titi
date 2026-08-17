@@ -65,6 +65,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DownloadError"
+  /streams/proxy:
+    get:
+      operationId: proxyHlsResource
+      tags: [streams]
+      summary: Proxy an HLS playlist or media resource
+      description: Fetches a public HLS resource while preserving the source access parameters and rewrites playlist URLs for native players.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          description: Public HTTP(S) URL of an HLS playlist, segment, or key.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Proxied HLS playlist or media resource
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+            video/mp2t:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid source URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadError"
+        "502":
+          description: The source could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadError"
 components:
   schemas:
     HealthStatus:

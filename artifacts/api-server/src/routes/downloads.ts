@@ -27,6 +27,12 @@ function getSourceHeaders(sourceUrl: URL): Record<string, string> {
     headers["Accept-Language"] = "fr-FR,fr;q=0.9,en;q=0.8";
   }
 
+  if (sourceUrl.hostname === "vmpx.online" || sourceUrl.hostname.endsWith(".vmpx.online")) {
+    headers.Referer = "https://vmpx.online/";
+    headers.Origin = "https://vmpx.online";
+    headers["Accept-Language"] = "fr-FR,fr;q=0.9,en;q=0.8";
+  }
+
   return headers;
 }
 
@@ -57,7 +63,7 @@ function isValidSourceUrl(value: unknown): value is string {
 function getErrorDetail(stderr: string) {
   const cleaned = stderr.replace(/\s+/g, " ").trim();
   if (cleaned.includes("403") || cleaned.includes("Forbidden")) {
-    return "Le lien HLS est refusé ou sa signature temporaire a expiré. Générez un nouveau lien depuis le site source.";
+    return "Le serveur source a refusé la requête (HTTP 403). Le lien peut être lié à sa page d’origine, à une adresse IP ou à une signature temporaire.";
   }
   if (cleaned.length > 0) return cleaned.slice(-500);
   return "Le serveur vidéo n’a pas pu être converti en MP4.";

@@ -1,1 +1,2 @@
 - [OpenAPI URI schemas](openapi-uri-schemas.md) — avoid `format: uri` when the generated Zod target is Zod 3; it emits an unavailable `zod.url()` call.
+- [Signed HLS links](signed-hls-links.md) — some providers use `s` as start time and `e` as duration, so `s` alone must not be treated as expiry.

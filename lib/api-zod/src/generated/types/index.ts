@@ -10,3 +10,4 @@ export * from './downloadError';
 export * from './downloadHlsAsMp4Mode';
 export * from './downloadHlsAsMp4Params';
 export * from './healthStatus';
+export * from './proxyHlsResourceParams';

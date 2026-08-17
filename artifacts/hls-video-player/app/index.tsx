@@ -5,7 +5,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getDownloadHlsAsMp4Url } from '@workspace/api-client-react';
+import { getDownloadHlsAsMp4Url, getProxyHlsResourceUrl } from '@workspace/api-client-react';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useColors } from '@/hooks/useColors';
 
@@ -73,8 +73,15 @@ function getStreamHeaders(streamUrl: string): Record<string, string> {
 
 function getSignedUrlExpiry(streamUrl: string): number | null {
   try {
-    const expiry = Number(new URL(streamUrl).searchParams.get('s'));
-    return Number.isFinite(expiry) && expiry > 0 ? expiry * 1000 : null;
+    const params = new URL(streamUrl).searchParams;
+    const start = Number(params.get('s'));
+    const endOrDuration = Number(params.get('e'));
+    if (!Number.isFinite(start) || start <= 0) return null;
+    if (Number.isFinite(endOrDuration) && endOrDuration > 0) {
+      const end = endOrDuration >= 1_000_000_000 ? endOrDuration : start + endOrDuration;
+      return end * 1000;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -96,6 +103,15 @@ function getApiDownloadUrl(streamUrl: string, mode: 'compatible' | 'fast') {
   return `${baseUrl}${getDownloadHlsAsMp4Url({ url: streamUrl, mode })}`;
 }
 
+function getApiProxyUrl(streamUrl: string) {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (!domain) {
+    throw new Error('Le relais HLS est indisponible dans cet environnement.');
+  }
+  const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
+  return `${baseUrl}${getProxyHlsResourceUrl({ url: streamUrl })}`;
+}
+
 export default function PlayerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -107,6 +123,9 @@ export default function PlayerScreen() {
   const [showDetails, setShowDetails] = useState(false);
   const [showDownloadOptions, setShowDownloadOptions] = useState(false);
   const [downloadState, setDownloadState] = useState<'idle' | 'working'>('idle');
+  const activeUrlRef = useRef<string | null>(null);
+  const proxyFallbackAttemptedRef = useRef(false);
+  activeUrlRef.current = activeUrl;
 
   const player = useVideoPlayer(null, (videoPlayer) => {
     videoPlayer.loop = false;
@@ -132,6 +151,31 @@ export default function PlayerScreen() {
         setErrorMessage(null);
       }
       if (status === 'error') {
+        const failedUrl = activeUrlRef.current;
+        if (failedUrl && !proxyFallbackAttemptedRef.current) {
+          proxyFallbackAttemptedRef.current = true;
+          setState('loading');
+          setErrorMessage(null);
+          void player
+            .replaceAsync({
+              uri: getApiProxyUrl(failedUrl),
+              contentType: 'hls',
+              metadata: {
+                title: 'HLS Video Player',
+                artist: 'Flux HLS',
+              },
+            })
+            .then(() => player.play())
+            .catch((fallbackError) => {
+              setState('error');
+              setErrorMessage(
+                fallbackError instanceof Error
+                  ? fallbackError.message
+                  : 'Impossible de charger ce flux, même via le relais HLS.',
+              );
+            });
+          return;
+        }
         setState('error');
         setErrorMessage(error?.message ?? 'Le serveur a refusé la lecture du flux.');
       }
@@ -171,6 +215,8 @@ export default function PlayerScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setUrl(nextUrl);
     setActiveUrl(nextUrl);
+    activeUrlRef.current = nextUrl;
+    proxyFallbackAttemptedRef.current = false;
     setState('loading');
     setErrorMessage(null);
     setShowDetails(false);
@@ -209,15 +255,16 @@ export default function PlayerScreen() {
       return;
     }
 
-    setShowDownloadOptions(false);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (action === 'browser') {
+      setShowDownloadOptions(false);
       await Linking.openURL(sourceUrl);
       return;
     }
 
     if (action === 'share') {
+      setShowDownloadOptions(false);
       await Share.share({
         message: sourceUrl,
         url: sourceUrl,
@@ -543,10 +590,10 @@ export default function PlayerScreen() {
             <View style={styles.errorCopy}>
               <Text style={[styles.errorTitle, { color: colors.foreground }]}>{errorTitle}</Text>
               <Text style={[styles.errorText, { color: colors.mutedForeground }]}>
-                {errorMessage}{' '}
+                 {errorMessage}{' '}
                 {signedUrlExpiry && signedUrlExpiry <= Date.now()
                   ? 'Collez un nouveau lien généré par le site source : une signature expirée ne peut pas être renouvelée par le lecteur.'
-                  : 'L’app ne peut pas contourner un accès protégé ou un DRM, mais elle envoie une requête adaptée pour les domaines pris en charge.'}
+                   : 'L’app conserve les paramètres du lien et relaie les playlists pour que les variantes et les segments restent accessibles.'}
               </Text>
               <Pressable
                 onPress={() => setShowDetails((value) => !value)}

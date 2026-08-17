@@ -31,3 +31,14 @@ export const DownloadHlsAsMp4QueryParams = zod.object({
 export const DownloadHlsAsMp4Response = zod.unknown()
 
 
+/**
+ * Fetches a public HLS resource while preserving the source access parameters and rewrites playlist URLs for native players.
+ * @summary Proxy an HLS playlist or media resource
+ */
+export const ProxyHlsResourceQueryParams = zod.object({
+  "url": zod.coerce.string().describe('Public HTTP(S) URL of an HLS playlist, segment, or key.')
+})
+
+export const ProxyHlsResourceResponse = zod.unknown()
+
+

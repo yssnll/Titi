@@ -18,7 +18,8 @@ import type {
 import type {
   DownloadError,
   DownloadHlsAsMp4Params,
-  HealthStatus
+  HealthStatus,
+  ProxyHlsResourceParams
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -199,6 +200,91 @@ export function useDownloadHlsAsMp4<TData = Awaited<ReturnType<typeof downloadHl
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getDownloadHlsAsMp4QueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getProxyHlsResourceUrl = (params: ProxyHlsResourceParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/streams/proxy?${stringifiedParams}` : `/api/streams/proxy`
+}
+
+/**
+ * Fetches a public HLS resource while preserving the source access parameters and rewrites playlist URLs for native players.
+ * @summary Proxy an HLS playlist or media resource
+ */
+export const proxyHlsResource = async (params: ProxyHlsResourceParams, options?: Parameters<typeof customFetch>[1]): Promise<string | Blob> => {
+
+  return customFetch<string | Blob>(getProxyHlsResourceUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getProxyHlsResourceQueryKey = (params?: ProxyHlsResourceParams,) => {
+    return [
+    `/api/streams/proxy`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getProxyHlsResourceQueryOptions = <TData = Awaited<ReturnType<typeof proxyHlsResource>>, TError = ErrorType<DownloadError>>(params: ProxyHlsResourceParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof proxyHlsResource>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getProxyHlsResourceQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof proxyHlsResource>>> = ({ signal }) => proxyHlsResource(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof proxyHlsResource>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ProxyHlsResourceQueryResult = NonNullable<Awaited<ReturnType<typeof proxyHlsResource>>>
+export type ProxyHlsResourceQueryError = ErrorType<DownloadError>
+
+
+/**
+ * @summary Proxy an HLS playlist or media resource
+ */
+
+export function useProxyHlsResource<TData = Awaited<ReturnType<typeof proxyHlsResource>>, TError = ErrorType<DownloadError>>(
+ params: ProxyHlsResourceParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof proxyHlsResource>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getProxyHlsResourceQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

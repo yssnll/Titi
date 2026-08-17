@@ -33,3 +33,10 @@ export const DownloadHlsAsMp4Mode = {
   fast: 'fast',
 } as const;
 
+export type ProxyHlsResourceParams = {
+/**
+ * Public HTTP(S) URL of an HLS playlist, segment, or key.
+ */
+url: string;
+};
+
