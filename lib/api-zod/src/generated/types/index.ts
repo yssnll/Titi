@@ -9,5 +9,6 @@
 export * from './downloadError';
 export * from './downloadHlsAsMp4Mode';
 export * from './downloadHlsAsMp4Params';
+export * from './downloadHlsAsMp4Quality';
 export * from './healthStatus';
 export * from './proxyHlsResourceParams';

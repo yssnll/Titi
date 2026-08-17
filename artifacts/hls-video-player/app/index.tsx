@@ -1,5 +1,10 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { File, Paths } from 'expo-file-system';
+import {
+  createDownloadResumable,
+  FileSystemSessionType,
+  type DownloadProgressData,
+} from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   Linking,
   Modal,
   Platform,
@@ -30,6 +36,16 @@ const MAX_HISTORY = 5;
 
 type PlaybackState = 'idle' | 'loading' | 'ready' | 'error';
 type DownloadAction = 'mp4' | 'fast' | 'browser' | 'share';
+type DownloadQuality = 'original' | '360' | '480' | '720' | '1080';
+type DownloadState = 'idle' | 'working' | 'browser';
+
+const QUALITY_OPTIONS: Array<{ value: DownloadQuality; label: string; hint: string }> = [
+  { value: 'original', label: 'Originale', hint: 'max' },
+  { value: '360', label: '360p', hint: 'léger' },
+  { value: '480', label: '480p', hint: 'standard' },
+  { value: '720', label: '720p', hint: 'HD' },
+  { value: '1080', label: '1080p', hint: 'Full HD' },
+];
 
 function isValidStreamUrl(value: string) {
   try {
@@ -95,13 +111,17 @@ function formatExpiry(expiry: number) {
   }).format(new Date(expiry));
 }
 
-function getApiDownloadUrl(streamUrl: string, mode: 'compatible' | 'fast') {
+function getApiDownloadUrl(
+  streamUrl: string,
+  mode: 'compatible' | 'fast',
+  quality: DownloadQuality,
+) {
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
   if (!domain) {
     throw new Error('Le service de conversion MP4 est indisponible dans cet environnement.');
   }
   const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
-  return `${baseUrl}${getDownloadHlsAsMp4Url({ url: streamUrl, mode })}`;
+  return `${baseUrl}${getDownloadHlsAsMp4Url({ url: streamUrl, mode, quality })}`;
 }
 
 function getApiProxyUrl(streamUrl: string) {
@@ -111,6 +131,14 @@ function getApiProxyUrl(streamUrl: string) {
   }
   const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
   return `${baseUrl}${getProxyHlsResourceUrl({ url: streamUrl })}`;
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} Go`;
 }
 
 export default function PlayerScreen() {
@@ -123,9 +151,14 @@ export default function PlayerScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showDownloadOptions, setShowDownloadOptions] = useState(false);
-  const [downloadState, setDownloadState] = useState<'idle' | 'working'>('idle');
+  const [selectedQuality, setSelectedQuality] = useState<DownloadQuality>('1080');
+  const [downloadState, setDownloadState] = useState<DownloadState>('idle');
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [downloadBytes, setDownloadBytes] = useState<{ written: number; total: number } | null>(null);
   const activeUrlRef = useRef<string | null>(null);
+  const activeDownloadRef = useRef<ReturnType<typeof createDownloadResumable> | null>(null);
+  const downloadRunRef = useRef(0);
   const proxyFallbackAttemptedRef = useRef(false);
   activeUrlRef.current = activeUrl;
 
@@ -188,6 +221,16 @@ export default function PlayerScreen() {
       subscription.remove();
     };
   }, [player]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' && downloadState === 'working' && Platform.OS !== 'web') {
+        setDownloadMessage('Téléchargement en arrière-plan… il continuera pendant que tu utilises une autre app.');
+      }
+    });
+
+    return () => subscription.remove();
+  }, [downloadState]);
 
   const sourceLabel = useMemo(() => (activeUrl ? shortenUrl(activeUrl) : 'Aucun flux actif'), [activeUrl]);
 
@@ -276,56 +319,62 @@ export default function PlayerScreen() {
     }
 
     const mode = action === 'fast' ? 'fast' : 'compatible';
-    const downloadUrl = getApiDownloadUrl(sourceUrl, mode);
+    const downloadUrl = getApiDownloadUrl(sourceUrl, mode, selectedQuality);
+    const downloadRun = downloadRunRef.current + 1;
+    downloadRunRef.current = downloadRun;
+    setDownloadState('working');
+    setDownloadProgress(null);
+    setDownloadBytes(null);
+    setDownloadMessage('Préparation de la conversion MP4…');
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      setDownloadState('working');
-      setDownloadMessage('Conversion en MP4 en cours… la fenêtre restera ouverte pendant le traitement.');
-      try {
-        const response = await fetch(downloadUrl);
-        if (!response.ok) {
-          const body = await response.text();
-          let detail = body;
-          try {
-            const parsed = JSON.parse(body) as { detail?: string; error?: string };
-            detail = parsed.detail ?? parsed.error ?? body;
-          } catch {
-            // Keep the plain response when the server did not return JSON.
-          }
-          throw new Error(detail || `Le serveur a répondu HTTP ${response.status}.`);
-        }
-
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = objectUrl;
-        anchor.download = `video-${Date.now()}.mp4`;
-        anchor.style.display = 'none';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
-        setShowDownloadOptions(false);
-        setDownloadMessage('Le fichier MP4 a été téléchargé dans votre navigateur.');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'La conversion MP4 a échoué.';
-        setDownloadMessage(`Téléchargement impossible : ${message}`);
-      } finally {
-        setDownloadState('idle');
-      }
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = `video-${Date.now()}.mp4`;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setShowDownloadOptions(false);
+      setDownloadState('browser');
+      setDownloadMessage(
+        'Safari gère maintenant le téléchargement. Il continue si tu changes d’app, tant que tu ne fermes pas l’onglet.',
+      );
       return;
     }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setDownloadState('working');
-    setDownloadMessage('Conversion en MP4 en cours… cela peut prendre quelques secondes.');
     try {
       const filename = `video-${Date.now()}.mp4`;
-      const file = await File.downloadFileAsync(
+      const destination = new File(Paths.cache, filename);
+      const downloadTask = createDownloadResumable(
         downloadUrl,
-        new File(Paths.cache, filename),
-        { idempotent: true },
+        destination.uri,
+        { sessionType: FileSystemSessionType.BACKGROUND },
+        (progress: DownloadProgressData) => {
+          if (downloadRun !== downloadRunRef.current) return;
+          const total = progress.totalBytesExpectedToWrite;
+          const percentage = total > 0
+            ? Math.min(100, Math.round((progress.totalBytesWritten / total) * 100))
+            : null;
+          setDownloadProgress(percentage);
+          setDownloadBytes({ written: progress.totalBytesWritten, total });
+          setDownloadMessage(
+            percentage === null
+              ? `Téléchargement en cours… ${formatBytes(progress.totalBytesWritten)} reçus`
+              : `Téléchargement en cours… ${percentage}%`,
+          );
+        },
       );
+      activeDownloadRef.current = downloadTask;
+      const result = await downloadTask.downloadAsync();
+      activeDownloadRef.current = null;
+      if (!result) {
+        throw new Error('Le téléchargement a été annulé.');
+      }
+      setDownloadProgress(100);
+      setDownloadMessage('Téléchargement terminé. Préparation du partage…');
+
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
         const message = `Fichier téléchargé : ${filename}`;
@@ -333,7 +382,7 @@ export default function PlayerScreen() {
         Alert.alert('Fichier téléchargé', `${filename} est disponible dans le stockage de l’app.`);
         return;
       }
-      await Sharing.shareAsync(file.uri, {
+      await Sharing.shareAsync(result.uri, {
         UTI: 'public.mpeg-4',
         mimeType: 'video/mp4',
         dialogTitle: 'Enregistrer la vidéo MP4',
@@ -350,6 +399,7 @@ export default function PlayerScreen() {
         message,
       );
     } finally {
+      activeDownloadRef.current = null;
       setDownloadState('idle');
     }
   };
@@ -547,12 +597,44 @@ export default function PlayerScreen() {
               </View>
 
               <Text style={[styles.sheetHint, { color: colors.mutedForeground }]}>
-                Choisissez la méthode qui convient à ce serveur.
+                Choisissez d’abord la résolution, puis la méthode de téléchargement.
               </Text>
+              <Text style={[styles.qualityLabel, { color: colors.foreground }]}>Qualité vidéo</Text>
+              <View style={styles.qualityGrid}>
+                {QUALITY_OPTIONS.map((option) => {
+                  const isSelected = selectedQuality === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      testID={`quality-${option.value}`}
+                      disabled={downloadState === 'working'}
+                      onPress={() => {
+                        setSelectedQuality(option.value);
+                        void Haptics.selectionAsync();
+                      }}
+                      style={({ pressed }) => [
+                        styles.qualityChip,
+                        {
+                          backgroundColor: isSelected ? colors.primary : colors.input,
+                          borderColor: isSelected ? colors.primary : colors.border,
+                          opacity: pressed || downloadState === 'working' ? 0.7 : 1,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.qualityChipLabel, { color: isSelected ? colors.primaryForeground : colors.foreground }]}>
+                        {option.label}
+                      </Text>
+                      <Text style={[styles.qualityChipHint, { color: isSelected ? colors.primaryForeground : colors.mutedForeground }]}>
+                        {option.hint}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
               {downloadMessage ? (
                 <View style={[styles.downloadNotice, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
                   <Ionicons
-                    name={downloadState === 'working' ? 'sync-outline' : 'information-circle-outline'}
+                    name={downloadState === 'working' ? 'sync-outline' : 'download-outline'}
                     size={17}
                     color={colors.accent}
                   />
@@ -561,10 +643,42 @@ export default function PlayerScreen() {
                   </Text>
                 </View>
               ) : null}
+              {downloadState === 'working' || downloadState === 'browser' ? (
+                <View style={styles.progressBlock}>
+                  <View style={styles.progressMeta}>
+                    <Text style={[styles.progressLabel, { color: colors.mutedForeground }]}>
+                      {downloadState === 'browser'
+                        ? 'Téléchargement géré par Safari'
+                        : downloadProgress === null
+                          ? 'Conversion / préparation'
+                          : 'Réception du fichier'}
+                    </Text>
+                    <Text style={[styles.progressValue, { color: colors.foreground }]}>
+                      {downloadProgress === null ? '…' : `${downloadProgress}%`}
+                    </Text>
+                  </View>
+                  <View style={[styles.progressTrack, { backgroundColor: colors.input }]}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        {
+                          backgroundColor: colors.accent,
+                          width: `${downloadProgress ?? 35}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                  {downloadBytes && downloadBytes.total > 0 ? (
+                    <Text style={[styles.progressBytes, { color: colors.mutedForeground }]}>
+                      {formatBytes(downloadBytes.written)} sur {formatBytes(downloadBytes.total)}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
 
               <Pressable
                 testID="mp4-download-option"
-                disabled={downloadState === 'working'}
+              disabled={downloadState === 'working'}
                 onPress={() => void downloadSource('mp4')}
                 style={({ pressed }) => [
                   styles.downloadOption,
@@ -579,7 +693,7 @@ export default function PlayerScreen() {
                     {downloadState === 'working' ? 'Conversion MP4…' : 'Télécharger en MP4'}
                   </Text>
                   <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
-                    Convertit le flux en vidéo MP4 compatible avec l’iPhone, puis ouvre le menu iOS pour l’enregistrer.
+                     Convertit le flux en MP4 compatible ({selectedQuality === 'original' ? 'meilleure qualité disponible' : selectedQuality + 'p'}), puis ouvre le menu iOS pour l’enregistrer.
                   </Text>
                 </View>
                 <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
@@ -600,7 +714,7 @@ export default function PlayerScreen() {
                 <View style={styles.optionCopy}>
                   <Text style={[styles.optionTitle, { color: colors.foreground }]}>MP4 rapide</Text>
                   <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
-                    Essaie de conserver la qualité originale sans réencoder la vidéo.
+                    Téléchargement rapide en {selectedQuality === 'original' ? 'qualité originale' : selectedQuality + 'p'}, sans réencodage si possible.
                   </Text>
                 </View>
                 <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
@@ -652,9 +766,31 @@ export default function PlayerScreen() {
         {downloadMessage && !showDownloadOptions ? (
           <View style={[styles.downloadStatusCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
             <Ionicons name="download-outline" size={18} color={colors.accent} />
-            <Text style={[styles.downloadStatusText, { color: colors.secondaryForeground }]}>
-              {downloadMessage}
-            </Text>
+            <View style={styles.downloadStatusCopy}>
+              <Text style={[styles.downloadStatusText, { color: colors.secondaryForeground }]}>
+                {downloadMessage}
+              </Text>
+              {downloadState === 'working' || downloadState === 'browser' ? (
+                <View style={styles.progressBlock}>
+                  <View style={[styles.progressTrack, { backgroundColor: colors.input }]}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        {
+                          backgroundColor: colors.accent,
+                          width: `${downloadProgress ?? 35}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                  {downloadProgress !== null ? (
+                    <Text style={[styles.progressBytes, { color: colors.mutedForeground }]}>
+                      {downloadProgress}%
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
@@ -782,9 +918,22 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 18, fontFamily: 'Inter_700Bold' },
   sheetSubtitle: { fontSize: 11, marginTop: 3, fontFamily: 'Inter_500Medium' },
   sheetHint: { fontSize: 12, lineHeight: 18, marginTop: 14, marginBottom: 12 },
+  qualityLabel: { fontSize: 13, fontFamily: 'Inter_700Bold', marginBottom: 8 },
+  qualityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  qualityChip: { minWidth: 72, borderRadius: 13, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8, alignItems: 'center' },
+  qualityChipLabel: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  qualityChipHint: { fontSize: 10, marginTop: 2, fontFamily: 'Inter_500Medium' },
   downloadNotice: { flexDirection: 'row', alignItems: 'center', borderRadius: 13, borderWidth: 1, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 10, gap: 8 },
   downloadNoticeText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
-  downloadStatusCard: { marginHorizontal: 18, marginTop: 12, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 11, gap: 8 },
+  progressBlock: { marginBottom: 10 },
+  progressMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  progressLabel: { fontSize: 11, fontFamily: 'Inter_500Medium' },
+  progressValue: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  progressTrack: { height: 7, borderRadius: 999, overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 999 },
+  progressBytes: { fontSize: 10, marginTop: 5, fontFamily: 'Inter_400Regular' },
+  downloadStatusCard: { marginHorizontal: 18, marginTop: 12, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 13, paddingVertical: 11, gap: 8 },
+  downloadStatusCopy: { flex: 1 },
   downloadStatusText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
   downloadOption: { minHeight: 72, borderRadius: 17, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, paddingVertical: 10, marginBottom: 8 },
   optionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 10 },

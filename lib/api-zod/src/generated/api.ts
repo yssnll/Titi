@@ -22,10 +22,12 @@ export const HealthCheckResponse = zod.object({
  * @summary Convert an HLS stream to MP4
  */
 export const downloadHlsAsMp4QueryModeDefault = `compatible`;
+export const downloadHlsAsMp4QueryQualityDefault = `original`;
 
 export const DownloadHlsAsMp4QueryParams = zod.object({
   "url": zod.coerce.string().describe('Public HTTP(S) URL of the HLS playlist.'),
-  "mode": zod.enum(['compatible', 'fast']).default(downloadHlsAsMp4QueryModeDefault).describe('Fast remux when the source codecs are MP4-compatible, or a broader compatibility conversion.')
+  "mode": zod.enum(['compatible', 'fast']).default(downloadHlsAsMp4QueryModeDefault).describe('Fast remux when the source codecs are MP4-compatible, or a broader compatibility conversion.'),
+  "quality": zod.enum(['original', '360', '480', '720', '1080']).default(downloadHlsAsMp4QueryQualityDefault).describe('Maximum output height. The closest available HLS variant is selected without upscaling.')
 })
 
 export const DownloadHlsAsMp4Response = zod.unknown()

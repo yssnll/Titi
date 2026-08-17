@@ -23,6 +23,10 @@ url: string;
  * Fast remux when the source codecs are MP4-compatible, or a broader compatibility conversion.
  */
 mode?: DownloadHlsAsMp4Mode;
+/**
+ * Maximum output height. The closest available HLS variant is selected without upscaling.
+ */
+quality?: DownloadHlsAsMp4Quality;
 };
 
 export type DownloadHlsAsMp4Mode = typeof DownloadHlsAsMp4Mode[keyof typeof DownloadHlsAsMp4Mode];
@@ -31,6 +35,17 @@ export type DownloadHlsAsMp4Mode = typeof DownloadHlsAsMp4Mode[keyof typeof Down
 export const DownloadHlsAsMp4Mode = {
   compatible: 'compatible',
   fast: 'fast',
+} as const;
+
+export type DownloadHlsAsMp4Quality = typeof DownloadHlsAsMp4Quality[keyof typeof DownloadHlsAsMp4Quality];
+
+
+export const DownloadHlsAsMp4Quality = {
+  original: 'original',
+  NUMBER_360: '360',
+  NUMBER_480: '480',
+  NUMBER_720: '720',
+  NUMBER_1080: '1080',
 } as const;
 
 export type ProxyHlsResourceParams = {

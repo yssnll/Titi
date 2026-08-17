@@ -45,6 +45,14 @@ paths:
             type: string
             enum: [compatible, fast]
             default: compatible
+        - name: quality
+          in: query
+          required: false
+          description: Maximum output height. The closest available HLS variant is selected without upscaling.
+          schema:
+            type: string
+            enum: [original, "360", "480", "720", "1080"]
+            default: original
       responses:
         "200":
           description: Converted MP4 video

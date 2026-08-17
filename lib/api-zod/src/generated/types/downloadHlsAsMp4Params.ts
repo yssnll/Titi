@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DownloadHlsAsMp4Mode } from './downloadHlsAsMp4Mode';
+import type { DownloadHlsAsMp4Quality } from './downloadHlsAsMp4Quality';
 
 export type DownloadHlsAsMp4Params = {
 /**
@@ -16,4 +17,8 @@ url: string;
  * Fast remux when the source codecs are MP4-compatible, or a broader compatibility conversion.
  */
 mode?: DownloadHlsAsMp4Mode;
+/**
+ * Maximum output height. The closest available HLS variant is selected without upscaling.
+ */
+quality?: DownloadHlsAsMp4Quality;
 };
