@@ -1,11 +1,17 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
+  Linking,
+  Modal,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -21,6 +27,7 @@ const HISTORY_KEY = '@hls-video-player/history';
 const MAX_HISTORY = 5;
 
 type PlaybackState = 'idle' | 'loading' | 'ready' | 'error';
+type DownloadAction = 'save' | 'browser' | 'share';
 
 function isValidStreamUrl(value: string) {
   try {
@@ -57,6 +64,17 @@ function getStreamHeaders(streamUrl: string): Record<string, string> {
   return headers;
 }
 
+function getDownloadFilename(streamUrl: string) {
+  try {
+    const pathname = new URL(streamUrl).pathname;
+    const lastSegment = pathname.split('/').filter(Boolean).pop();
+    if (lastSegment?.includes('.')) return lastSegment.split('?')[0];
+  } catch {
+    // Use the fallback below for malformed URLs; validation happens before download.
+  }
+  return 'flux-hls.m3u8';
+}
+
 export default function PlayerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -66,6 +84,8 @@ export default function PlayerScreen() {
   const [state, setState] = useState<PlaybackState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [showDownloadOptions, setShowDownloadOptions] = useState(false);
+  const [downloadState, setDownloadState] = useState<'idle' | 'working'>('idle');
 
   const player = useVideoPlayer(null, (videoPlayer) => {
     videoPlayer.loop = false;
@@ -147,6 +167,60 @@ export default function PlayerScreen() {
   const clearHistory = async () => {
     await Haptics.selectionAsync();
     await persistHistory([]);
+  };
+
+  const downloadSource = async (action: DownloadAction) => {
+    const sourceUrl = (activeUrl ?? url).trim();
+    if (!isValidStreamUrl(sourceUrl)) {
+      setState('error');
+      setErrorMessage('Collez une adresse vidéo valide avant de télécharger.');
+      setShowDownloadOptions(false);
+      return;
+    }
+
+    setShowDownloadOptions(false);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    if (action === 'browser') {
+      await Linking.openURL(sourceUrl);
+      return;
+    }
+
+    if (action === 'share') {
+      await Share.share({
+        message: sourceUrl,
+        url: sourceUrl,
+        title: 'Lien du flux vidéo',
+      });
+      return;
+    }
+
+    setDownloadState('working');
+    try {
+      const filename = getDownloadFilename(sourceUrl);
+      const file = await File.downloadFileAsync(
+        sourceUrl,
+        new File(Paths.cache, filename),
+        { headers: getStreamHeaders(sourceUrl), idempotent: true },
+      );
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Fichier téléchargé', `Le fichier ${filename} est disponible dans le stockage de l’app.`);
+        return;
+      }
+      await Sharing.shareAsync(file.uri, {
+        UTI: 'public.playlist',
+        mimeType: 'application/vnd.apple.mpegurl',
+        dialogTitle: 'Enregistrer la playlist HLS',
+      });
+    } catch (error) {
+      Alert.alert(
+        'Téléchargement impossible',
+        error instanceof Error ? error.message : 'Le serveur n’a pas autorisé le téléchargement de ce flux.',
+      );
+    } finally {
+      setDownloadState('idle');
+    }
   };
 
   const stateCopy = {
@@ -260,19 +334,148 @@ export default function PlayerScreen() {
               </Pressable>
             ) : null}
           </View>
-          <Pressable
-            testID="open-stream-button"
-            onPress={() => void openStream()}
-            style={({ pressed }) => [
-              styles.openButton,
-              { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 },
-            ]}
-          >
-            <Ionicons name="play" size={18} color={colors.primaryForeground} />
-            <Text style={[styles.openButtonText, { color: colors.primaryForeground }]}>Lire le flux</Text>
-            <Feather name="arrow-up-right" size={17} color={colors.primaryForeground} />
-          </Pressable>
+          <View style={styles.actionRow}>
+            <Pressable
+              testID="open-stream-button"
+              onPress={() => void openStream()}
+              style={({ pressed }) => [
+                styles.openButton,
+                styles.playButton,
+                { backgroundColor: colors.primary, opacity: pressed ? 0.78 : 1 },
+              ]}
+            >
+              <Ionicons name="play" size={18} color={colors.primaryForeground} />
+              <Text style={[styles.openButtonText, { color: colors.primaryForeground }]}>Lire le flux</Text>
+              <Feather name="arrow-up-right" size={17} color={colors.primaryForeground} />
+            </Pressable>
+            <Pressable
+              testID="download-button"
+              accessibilityLabel="Télécharger le flux"
+              onPress={() => setShowDownloadOptions(true)}
+              style={({ pressed }) => [
+                styles.openButton,
+                styles.downloadButton,
+                { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? 0.72 : 1 },
+              ]}
+            >
+              <Ionicons name="download-outline" size={19} color={colors.secondaryForeground} />
+              <Text style={[styles.downloadButtonText, { color: colors.secondaryForeground }]}>Télécharger</Text>
+            </Pressable>
+          </View>
         </View>
+
+        <Modal
+          visible={showDownloadOptions}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowDownloadOptions(false)}
+        >
+          <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+            <Pressable
+              accessibilityLabel="Fermer les options de téléchargement"
+              onPress={() => setShowDownloadOptions(false)}
+              style={StyleSheet.absoluteFill}
+            />
+            <View
+              style={[
+                styles.downloadSheet,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  paddingBottom: insets.bottom + 16,
+                },
+              ]}
+            >
+              <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+              <View style={styles.sheetHeader}>
+                <View style={[styles.sheetIcon, { backgroundColor: colors.secondary }]}>
+                  <Ionicons name="download-outline" size={21} color={colors.accent} />
+                </View>
+                <View style={styles.sheetHeaderCopy}>
+                  <Text style={[styles.sheetTitle, { color: colors.foreground }]}>Télécharger le flux</Text>
+                  <Text numberOfLines={1} style={[styles.sheetSubtitle, { color: colors.mutedForeground }]}>
+                    {shortenUrl(activeUrl ?? url)}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="Fermer"
+                  hitSlop={12}
+                  onPress={() => setShowDownloadOptions(false)}
+                  style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}
+                >
+                  <Ionicons name="close" size={22} color={colors.mutedForeground} />
+                </Pressable>
+              </View>
+
+              <Text style={[styles.sheetHint, { color: colors.mutedForeground }]}>
+                Choisissez la méthode qui convient à ce serveur.
+              </Text>
+
+              <Pressable
+                testID="save-download-option"
+                disabled={downloadState === 'working'}
+                onPress={() => void downloadSource('save')}
+                style={({ pressed }) => [
+                  styles.downloadOption,
+                  { borderColor: colors.border, backgroundColor: colors.input, opacity: pressed ? 0.72 : 1 },
+                ]}
+              >
+                <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
+                  <Ionicons name="folder-open-outline" size={20} color={colors.accent} />
+                </View>
+                <View style={styles.optionCopy}>
+                  <Text style={[styles.optionTitle, { color: colors.foreground }]}>
+                    {downloadState === 'working' ? 'Téléchargement…' : 'Enregistrer la playlist HLS'}
+                  </Text>
+                  <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
+                    Télécharge le fichier .m3u8, puis ouvre le menu iOS pour l’enregistrer dans Fichiers.
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </Pressable>
+
+              <Pressable
+                testID="browser-download-option"
+                onPress={() => void downloadSource('browser')}
+                style={({ pressed }) => [
+                  styles.downloadOption,
+                  { borderColor: colors.border, backgroundColor: colors.input, opacity: pressed ? 0.72 : 1 },
+                ]}
+              >
+                <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
+                  <Ionicons name="globe-outline" size={20} color={colors.accent} />
+                </View>
+                <View style={styles.optionCopy}>
+                  <Text style={[styles.optionTitle, { color: colors.foreground }]}>Ouvrir dans Safari</Text>
+                  <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
+                    À utiliser si le site propose son propre bouton de téléchargement.
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </Pressable>
+
+              <Pressable
+                testID="share-download-option"
+                onPress={() => void downloadSource('share')}
+                style={({ pressed }) => [
+                  styles.downloadOption,
+                  { borderColor: colors.border, backgroundColor: colors.input, opacity: pressed ? 0.72 : 1 },
+                ]}
+              >
+                <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
+                  <Ionicons name="share-outline" size={20} color={colors.accent} />
+                </View>
+                <View style={styles.optionCopy}>
+                  <Text style={[styles.optionTitle, { color: colors.foreground }]}>Partager le lien</Text>
+                  <Text style={[styles.optionDescription, { color: colors.mutedForeground }]}>
+                    Envoie l’adresse vers une autre app ou un gestionnaire de téléchargement.
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
         {state === 'error' && errorMessage ? (
           <View style={[styles.errorCard, { backgroundColor: colors.card, borderColor: colors.destructive }]}>
@@ -381,7 +584,25 @@ const styles = StyleSheet.create({
   inputWrap: { minHeight: 52, borderRadius: 15, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14 },
   input: { flex: 1, fontSize: 13, fontFamily: 'Inter_400Regular', paddingHorizontal: 10, paddingVertical: 12 },
   openButton: { minHeight: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 12, gap: 9 },
+  actionRow: { flexDirection: 'row', gap: 9 },
+  playButton: { flex: 1 },
+  downloadButton: { paddingHorizontal: 14, borderWidth: 1, gap: 7 },
   openButtonText: { fontSize: 15, fontFamily: 'Inter_700Bold' },
+  downloadButtonText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end' },
+  downloadSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, borderTopWidth: 1, paddingHorizontal: 18, paddingTop: 10 },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 18 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center' },
+  sheetIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  sheetHeaderCopy: { flex: 1 },
+  sheetTitle: { fontSize: 18, fontFamily: 'Inter_700Bold' },
+  sheetSubtitle: { fontSize: 11, marginTop: 3, fontFamily: 'Inter_500Medium' },
+  sheetHint: { fontSize: 12, lineHeight: 18, marginTop: 14, marginBottom: 12 },
+  downloadOption: { minHeight: 72, borderRadius: 17, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, paddingVertical: 10, marginBottom: 8 },
+  optionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  optionCopy: { flex: 1, paddingRight: 8 },
+  optionTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  optionDescription: { fontSize: 11, lineHeight: 16, marginTop: 3 },
   errorCard: { marginHorizontal: 18, borderWidth: 1, borderRadius: 20, padding: 15, flexDirection: 'row' },
   errorIcon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', marginRight: 11 },
   errorCopy: { flex: 1 },
