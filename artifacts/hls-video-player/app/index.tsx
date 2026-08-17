@@ -141,6 +141,21 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} Go`;
 }
 
+function formatRemainingTime(seconds: number) {
+  const roundedSeconds = Math.max(1, Math.ceil(seconds));
+  if (roundedSeconds < 60) return `${roundedSeconds} s`;
+
+  const minutes = Math.floor(roundedSeconds / 60);
+  const remainingSeconds = roundedSeconds % 60;
+  if (minutes < 60) {
+    return remainingSeconds > 0 ? `${minutes} min ${remainingSeconds} s` : `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+}
+
 export default function PlayerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -156,9 +171,11 @@ export default function PlayerScreen() {
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [downloadBytes, setDownloadBytes] = useState<{ written: number; total: number } | null>(null);
+  const [downloadEtaSeconds, setDownloadEtaSeconds] = useState<number | null>(null);
   const activeUrlRef = useRef<string | null>(null);
   const activeDownloadRef = useRef<ReturnType<typeof createDownloadResumable> | null>(null);
   const downloadRunRef = useRef(0);
+  const downloadMetricsRef = useRef({ startedAt: 0, lastWritten: 0, lastAt: 0, speedBytesPerSecond: 0 });
   const proxyFallbackAttemptedRef = useRef(false);
   activeUrlRef.current = activeUrl;
 
@@ -325,6 +342,14 @@ export default function PlayerScreen() {
     setDownloadState('working');
     setDownloadProgress(null);
     setDownloadBytes(null);
+    setDownloadEtaSeconds(null);
+    const downloadStartedAt = Date.now();
+    downloadMetricsRef.current = {
+      startedAt: downloadStartedAt,
+      lastWritten: 0,
+      lastAt: downloadStartedAt,
+      speedBytesPerSecond: 0,
+    };
     setDownloadMessage('Préparation de la conversion MP4…');
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -337,6 +362,7 @@ export default function PlayerScreen() {
       anchor.remove();
       setShowDownloadOptions(false);
       setDownloadState('browser');
+      setDownloadEtaSeconds(null);
       setDownloadMessage(
         'Safari gère maintenant le téléchargement. Il continue si tu changes d’app, tant que tu ne fermes pas l’onglet.',
       );
@@ -357,6 +383,26 @@ export default function PlayerScreen() {
           const percentage = total > 0
             ? Math.min(100, Math.round((progress.totalBytesWritten / total) * 100))
             : null;
+          const now = Date.now();
+          const metrics = downloadMetricsRef.current;
+          const elapsedSeconds = Math.max((now - metrics.startedAt) / 1000, 0.25);
+          const intervalSeconds = Math.max((now - metrics.lastAt) / 1000, 0.25);
+          const intervalBytes = Math.max(progress.totalBytesWritten - metrics.lastWritten, 0);
+          const instantSpeed = intervalBytes / intervalSeconds;
+          const overallSpeed = progress.totalBytesWritten / elapsedSeconds;
+          const measuredSpeed = instantSpeed > 0
+            ? metrics.speedBytesPerSecond > 0
+              ? metrics.speedBytesPerSecond * 0.7 + instantSpeed * 0.3
+              : overallSpeed
+            : metrics.speedBytesPerSecond;
+          metrics.lastWritten = progress.totalBytesWritten;
+          metrics.lastAt = now;
+          metrics.speedBytesPerSecond = measuredSpeed;
+          setDownloadEtaSeconds(
+            total > 0 && measuredSpeed > 0
+              ? Math.max(0, (total - progress.totalBytesWritten) / measuredSpeed)
+              : null,
+          );
           setDownloadProgress(percentage);
           setDownloadBytes({ written: progress.totalBytesWritten, total });
           setDownloadMessage(
@@ -373,6 +419,7 @@ export default function PlayerScreen() {
         throw new Error('Le téléchargement a été annulé.');
       }
       setDownloadProgress(100);
+      setDownloadEtaSeconds(0);
       setDownloadMessage('Téléchargement terminé. Préparation du partage…');
 
       const canShare = await Sharing.isAvailableAsync();
@@ -673,6 +720,15 @@ export default function PlayerScreen() {
                       {formatBytes(downloadBytes.written)} sur {formatBytes(downloadBytes.total)}
                     </Text>
                   ) : null}
+                  <Text style={[styles.progressEta, { color: colors.mutedForeground }]}>
+                    {downloadState === 'browser'
+                      ? 'Safari calcule la durée restante.'
+                      : downloadEtaSeconds === null
+                        ? 'Estimation du temps restant…'
+                        : downloadEtaSeconds === 0
+                          ? 'Fichier reçu.'
+                          : `Temps restant estimé : ${formatRemainingTime(downloadEtaSeconds)}`}
+                  </Text>
                 </View>
               ) : null}
 
@@ -785,7 +841,9 @@ export default function PlayerScreen() {
                   </View>
                   {downloadProgress !== null ? (
                     <Text style={[styles.progressBytes, { color: colors.mutedForeground }]}>
-                      {downloadProgress}%
+                      {downloadProgress}%{downloadEtaSeconds !== null && downloadEtaSeconds > 0
+                        ? ` · encore ${formatRemainingTime(downloadEtaSeconds)}`
+                        : ''}
                     </Text>
                   ) : null}
                 </View>
@@ -932,6 +990,7 @@ const styles = StyleSheet.create({
   progressTrack: { height: 7, borderRadius: 999, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 999 },
   progressBytes: { fontSize: 10, marginTop: 5, fontFamily: 'Inter_400Regular' },
+  progressEta: { fontSize: 10, marginTop: 3, fontFamily: 'Inter_500Medium' },
   downloadStatusCard: { marginHorizontal: 18, marginTop: 12, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 13, paddingVertical: 11, gap: 8 },
   downloadStatusCopy: { flex: 1 },
   downloadStatusText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
