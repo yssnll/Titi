@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/hls-video-player/"
+title = "HLS Video Player"
+description = "Une application iOS mobile pour ouvrir des flux vidéo HLS .m3u8, conserver les derniers liens et diagnostiquer clairement les refus d'accès comme les erreurs 403."
+version = "1.0.0"
+id = "artifacts/hls-video-player"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/hls-video-player/" ]
+localPort = 26249
+
+[services.development]
+run = "pnpm --filter @workspace/hls-video-player run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/hls-video-player", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/hls-video-player", "run", "serve" ]
+
+[services.env]
+PORT = "26249"
+BASE_PATH = "/hls-video-player/"
