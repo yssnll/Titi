@@ -10,6 +10,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   Pressable,
   Share,
   StyleSheet,
@@ -123,6 +124,7 @@ export default function PlayerScreen() {
   const [showDetails, setShowDetails] = useState(false);
   const [showDownloadOptions, setShowDownloadOptions] = useState(false);
   const [downloadState, setDownloadState] = useState<'idle' | 'working'>('idle');
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const activeUrlRef = useRef<string | null>(null);
   const proxyFallbackAttemptedRef = useRef(false);
   activeUrlRef.current = activeUrl;
@@ -255,15 +257,15 @@ export default function PlayerScreen() {
       return;
     }
 
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
     if (action === 'browser') {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setShowDownloadOptions(false);
       await Linking.openURL(sourceUrl);
       return;
     }
 
     if (action === 'share') {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setShowDownloadOptions(false);
       await Share.share({
         message: sourceUrl,
@@ -273,18 +275,62 @@ export default function PlayerScreen() {
       return;
     }
 
+    const mode = action === 'fast' ? 'fast' : 'compatible';
+    const downloadUrl = getApiDownloadUrl(sourceUrl, mode);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      setDownloadState('working');
+      setDownloadMessage('Conversion en MP4 en cours… la fenêtre restera ouverte pendant le traitement.');
+      try {
+        const response = await fetch(downloadUrl);
+        if (!response.ok) {
+          const body = await response.text();
+          let detail = body;
+          try {
+            const parsed = JSON.parse(body) as { detail?: string; error?: string };
+            detail = parsed.detail ?? parsed.error ?? body;
+          } catch {
+            // Keep the plain response when the server did not return JSON.
+          }
+          throw new Error(detail || `Le serveur a répondu HTTP ${response.status}.`);
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = `video-${Date.now()}.mp4`;
+        anchor.style.display = 'none';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+        setShowDownloadOptions(false);
+        setDownloadMessage('Le fichier MP4 a été téléchargé dans votre navigateur.');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'La conversion MP4 a échoué.';
+        setDownloadMessage(`Téléchargement impossible : ${message}`);
+      } finally {
+        setDownloadState('idle');
+      }
+      return;
+    }
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setDownloadState('working');
+    setDownloadMessage('Conversion en MP4 en cours… cela peut prendre quelques secondes.');
     try {
-      const mode = action === 'fast' ? 'fast' : 'compatible';
       const filename = `video-${Date.now()}.mp4`;
       const file = await File.downloadFileAsync(
-        getApiDownloadUrl(sourceUrl, mode),
+        downloadUrl,
         new File(Paths.cache, filename),
         { idempotent: true },
       );
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        Alert.alert('Fichier téléchargé', `Le fichier ${filename} est disponible dans le stockage de l’app.`);
+        const message = `Fichier téléchargé : ${filename}`;
+        setDownloadMessage(message);
+        Alert.alert('Fichier téléchargé', `${filename} est disponible dans le stockage de l’app.`);
         return;
       }
       await Sharing.shareAsync(file.uri, {
@@ -292,10 +338,16 @@ export default function PlayerScreen() {
         mimeType: 'video/mp4',
         dialogTitle: 'Enregistrer la vidéo MP4',
       });
+      setDownloadMessage('Le fichier MP4 est prêt. Choisissez où l’enregistrer dans le menu de partage.');
     } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Le serveur n’a pas autorisé le téléchargement de ce flux.';
+      setDownloadMessage(`Téléchargement impossible : ${message}`);
       Alert.alert(
         'Téléchargement impossible',
-        error instanceof Error ? error.message : 'Le serveur n’a pas autorisé le téléchargement de ce flux.',
+        message,
       );
     } finally {
       setDownloadState('idle');
@@ -435,7 +487,10 @@ export default function PlayerScreen() {
             <Pressable
               testID="download-button"
               accessibilityLabel="Télécharger le flux"
-              onPress={() => setShowDownloadOptions(true)}
+              onPress={() => {
+                setDownloadMessage(null);
+                setShowDownloadOptions(true);
+              }}
               style={({ pressed }) => [
                 styles.openButton,
                 styles.downloadButton,
@@ -494,6 +549,18 @@ export default function PlayerScreen() {
               <Text style={[styles.sheetHint, { color: colors.mutedForeground }]}>
                 Choisissez la méthode qui convient à ce serveur.
               </Text>
+              {downloadMessage ? (
+                <View style={[styles.downloadNotice, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                  <Ionicons
+                    name={downloadState === 'working' ? 'sync-outline' : 'information-circle-outline'}
+                    size={17}
+                    color={colors.accent}
+                  />
+                  <Text style={[styles.downloadNoticeText, { color: colors.secondaryForeground }]}>
+                    {downloadMessage}
+                  </Text>
+                </View>
+              ) : null}
 
               <Pressable
                 testID="mp4-download-option"
@@ -581,6 +648,15 @@ export default function PlayerScreen() {
             </View>
           </View>
         </Modal>
+
+        {downloadMessage && !showDownloadOptions ? (
+          <View style={[styles.downloadStatusCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+            <Ionicons name="download-outline" size={18} color={colors.accent} />
+            <Text style={[styles.downloadStatusText, { color: colors.secondaryForeground }]}>
+              {downloadMessage}
+            </Text>
+          </View>
+        ) : null}
 
         {state === 'error' && errorMessage ? (
           <View style={[styles.errorCard, { backgroundColor: colors.card, borderColor: colors.destructive }]}>
@@ -706,6 +782,10 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 18, fontFamily: 'Inter_700Bold' },
   sheetSubtitle: { fontSize: 11, marginTop: 3, fontFamily: 'Inter_500Medium' },
   sheetHint: { fontSize: 12, lineHeight: 18, marginTop: 14, marginBottom: 12 },
+  downloadNotice: { flexDirection: 'row', alignItems: 'center', borderRadius: 13, borderWidth: 1, paddingHorizontal: 11, paddingVertical: 9, marginBottom: 10, gap: 8 },
+  downloadNoticeText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
+  downloadStatusCard: { marginHorizontal: 18, marginTop: 12, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 11, gap: 8 },
+  downloadStatusText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
   downloadOption: { minHeight: 72, borderRadius: 17, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, paddingVertical: 10, marginBottom: 8 },
   optionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   optionCopy: { flex: 1, paddingRight: 8 },
