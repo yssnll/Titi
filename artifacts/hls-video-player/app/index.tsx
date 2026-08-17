@@ -61,7 +61,29 @@ function getStreamHeaders(streamUrl: string): Record<string, string> {
     headers['Accept-Language'] = 'fr-FR,fr;q=0.9,en;q=0.8';
   }
 
+  if (parsed.hostname === 'uqload.vc' || parsed.hostname.endsWith('.uqload.vc')) {
+    headers.Referer = 'https://uqload.to/';
+    headers.Origin = 'https://uqload.to';
+    headers['Accept-Language'] = 'fr-FR,fr;q=0.9,en;q=0.8';
+  }
+
   return headers;
+}
+
+function getSignedUrlExpiry(streamUrl: string): number | null {
+  try {
+    const expiry = Number(new URL(streamUrl).searchParams.get('s'));
+    return Number.isFinite(expiry) && expiry > 0 ? expiry * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatExpiry(expiry: number) {
+  return new Intl.DateTimeFormat('fr-BE', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(expiry));
 }
 
 function getDownloadFilename(streamUrl: string) {
@@ -134,6 +156,16 @@ export default function PlayerScreen() {
     if (!isValidStreamUrl(nextUrl)) {
       setState('error');
       setErrorMessage('Collez une adresse vidéo complète commençant par http:// ou https://.');
+      return;
+    }
+
+    const signedUrlExpiry = getSignedUrlExpiry(nextUrl);
+    if (signedUrlExpiry && signedUrlExpiry <= Date.now()) {
+      setUrl(nextUrl);
+      setActiveUrl(nextUrl);
+      setState('error');
+      setErrorMessage(`Ce lien signé a expiré le ${formatExpiry(signedUrlExpiry)}. Demandez un nouveau lien au site source.`);
+      setShowDetails(false);
       return;
     }
 
@@ -229,7 +261,12 @@ export default function PlayerScreen() {
     ready: { label: 'Lecture en cours', color: colors.success },
     error: { label: 'Accès refusé ou flux indisponible', color: colors.destructive },
   }[state];
-  const errorTitle = errorMessage?.includes('403') ? 'Le serveur a répondu 403' : 'Lecture refusée';
+  const signedUrlExpiry = activeUrl ? getSignedUrlExpiry(activeUrl) : null;
+  const errorTitle = signedUrlExpiry && signedUrlExpiry <= Date.now()
+    ? 'Le lien a expiré'
+    : errorMessage?.includes('403')
+      ? 'Le serveur a répondu 403'
+      : 'Lecture refusée';
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -485,7 +522,10 @@ export default function PlayerScreen() {
             <View style={styles.errorCopy}>
               <Text style={[styles.errorTitle, { color: colors.foreground }]}>{errorTitle}</Text>
               <Text style={[styles.errorText, { color: colors.mutedForeground }]}>
-                {errorMessage} L’app ne peut pas contourner un accès protégé, une expiration ou un DRM, mais elle envoie une requête iOS adaptée avec le référent du site.
+                {errorMessage}{' '}
+                {signedUrlExpiry && signedUrlExpiry <= Date.now()
+                  ? 'Collez un nouveau lien généré par le site source : une signature expirée ne peut pas être renouvelée par le lecteur.'
+                  : 'L’app ne peut pas contourner un accès protégé ou un DRM, mais elle envoie une requête adaptée pour les domaines pris en charge.'}
               </Text>
               <Pressable
                 onPress={() => setShowDetails((value) => !value)}
