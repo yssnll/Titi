@@ -40,6 +40,23 @@ function shortenUrl(value: string) {
   }
 }
 
+function getStreamHeaders(streamUrl: string): Record<string, string> {
+  const parsed = new URL(streamUrl);
+  const headers: Record<string, string> = {
+    Accept: '*/*',
+    'User-Agent':
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+  };
+
+  if (parsed.hostname === 'video.sibnet.ru' || parsed.hostname.endsWith('.sibnet.ru')) {
+    headers.Referer = 'https://video.sibnet.ru/';
+    headers.Origin = 'https://video.sibnet.ru';
+    headers['Accept-Language'] = 'fr-FR,fr;q=0.9,en;q=0.8';
+  }
+
+  return headers;
+}
+
 export default function PlayerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -114,10 +131,7 @@ export default function PlayerScreen() {
       await player.replaceAsync({
         uri: nextUrl,
         contentType: 'hls',
-        headers: {
-          Referer: 'https://video.sibnet.ru/',
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-        },
+        headers: getStreamHeaders(nextUrl),
         metadata: {
           title: 'HLS Video Player',
           artist: 'Flux HLS',
@@ -141,6 +155,7 @@ export default function PlayerScreen() {
     ready: { label: 'Lecture en cours', color: colors.success },
     error: { label: 'Accès refusé ou flux indisponible', color: colors.destructive },
   }[state];
+  const errorTitle = errorMessage?.includes('403') ? 'Le serveur a répondu 403' : 'Lecture refusée';
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -265,7 +280,7 @@ export default function PlayerScreen() {
               <Ionicons name="shield-outline" size={21} color={colors.destructive} />
             </View>
             <View style={styles.errorCopy}>
-              <Text style={[styles.errorTitle, { color: colors.foreground }]}>Le serveur a répondu 403</Text>
+              <Text style={[styles.errorTitle, { color: colors.foreground }]}>{errorTitle}</Text>
               <Text style={[styles.errorText, { color: colors.mutedForeground }]}>
                 {errorMessage} L’app ne peut pas contourner un accès protégé, une expiration ou un DRM, mais elle envoie une requête iOS adaptée avec le référent du site.
               </Text>
