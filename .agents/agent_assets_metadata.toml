@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "maypBCiw3K-sC5gFiNrZJ"
+uri = "file://exports/hls-video-player-ipa-source.zip"
+type = "unspecified"
+title = "HLS Video Player — source IPA iOS"
+description = "Archive prête pour le build iOS, avec l’app Expo, le serveur API, les bibliothèques partagées et le guide pour générer une vraie IPA signée."
