@@ -39,3 +39,7 @@ yarn-error.*
 .vercel
 
 .env
+
+# Keep the generated iOS project for macOS IPA builds.
+!ios/
+!ios/**
