@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Typecheck and compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and compile workspace
+        env:
+          BASE_PATH: /hls-video-player
+          REPLIT_INTERNAL_APP_DOMAIN: github-actions.invalid
+          REPLIT_DEV_DOMAIN: github-actions.invalid
+          REPL_ID: github-actions
+        run: pnpm run build
+
+      - name: Upload compiled artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-artifacts
+          if-no-files-found: error
+          path: |
+            artifacts/api-server/dist
+            artifacts/hls-video-player/static-build
