@@ -1,0 +1,82 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "artifacts/hls-video-player/**"
+      - "lib/api-client-react/**"
+      - "lib/api-zod/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/ios-ipa.yml"
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned iOS IPA
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install CocoaPods
+        run: sudo gem install cocoapods --no-document
+
+      - name: Install iOS native dependencies
+        working-directory: artifacts/hls-video-player/ios
+        run: pod install --repo-update
+
+      - name: Archive iOS application
+        working-directory: artifacts/hls-video-player/ios
+        env:
+          EXPO_PUBLIC_DOMAIN: github-actions.invalid
+          EXPO_PUBLIC_REPL_ID: github-actions
+        run: |
+          xcodebuild \
+            -workspace HLSVideoPlayer.xcworkspace \
+            -scheme HLSVideoPlayer \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/build/HLSVideoPlayer.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        working-directory: artifacts/hls-video-player/ios
+        run: |
+          rm -rf build/Payload build/HLSVideoPlayer-unsigned.ipa
+          mkdir -p build/Payload
+          cp -R build/HLSVideoPlayer.xcarchive/Products/Applications/HLSVideoPlayer.app build/Payload/
+          ditto -c -k --sequesterRsrc --keepParent build/Payload build/HLSVideoPlayer-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hls-video-player-ipa
+          if-no-files-found: error
+          path: artifacts/hls-video-player/ios/build/HLSVideoPlayer-unsigned.ipa
